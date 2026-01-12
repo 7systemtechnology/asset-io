@@ -34,7 +34,7 @@ if %errorlevel% neq 0 (
 )
 
 REM Set your server URL here
-set "SERVER_URL=http://192.168.2.6/"
+set "SERVER_URL=http://192.168.2.6/front/inventory.php"
 
 REM Install the agent silently
 winget install --id GLPI-Project.GLPI-Agent --silent --accept-package-agreements --accept-source-agreements --override "/quiet SERVER='%SERVER_URL%' RUNNOW=1 TAG='assetio' EXECMODE=service ADD_FIREWALL_EXCEPTION=1" >nul 2>&1
@@ -155,5 +155,6 @@ Possible reasons:
 The agent is installed but may not send inventory until server is reachable.
 
 Assetio Agent is now monitoring this computer.
+
 
 
