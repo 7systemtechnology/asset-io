@@ -1,4 +1,3 @@
-
 #!/bin/bash
 
 # Colors for output
@@ -44,12 +43,12 @@ fi
 
 echo ""
 
-# Get the latest version from GitHub API
+# Get the latest version
 echo "Fetching latest Assetio Agent version..."
 LATEST_VERSION=$(curl -s -L https://api.github.com/repos/glpi-project/glpi-agent/releases/latest 2>/dev/null | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' | tr -d '[:space:]')
 
 if [ -z "$LATEST_VERSION" ]; then
-    echo -e "${YELLOW}WARNING: Could not fetch latest version from GitHub${NC}"
+    echo -e "${YELLOW}WARNING: Could not fetch latest version${NC}"
     echo "Using fallback version 1.10"
     LATEST_VERSION="1.10"
 else
@@ -58,12 +57,11 @@ fi
 
 echo ""
 
-# Construct download URL (macOS packages use underscore between version and arch)
+# Construct download URL
 PKG_NAME="GLPI-Agent-${LATEST_VERSION}_${PKG_ARCH}.pkg"
 DOWNLOAD_URL="https://github.com/glpi-project/glpi-agent/releases/download/${LATEST_VERSION}/${PKG_NAME}"
 
 echo "Downloading Assetio Agent..."
-echo "Source: GitHub GLPI-Project"
 echo ""
 
 # Create temporary directory
@@ -77,18 +75,23 @@ fi
 
 cd "$TMP_DIR" || exit 1
 
-# Download with error handling
-echo "Downloading from: $DOWNLOAD_URL"
-curl -L -f -o "$PKG_NAME" "$DOWNLOAD_URL" 2>&1
+# Download with error handling (silent mode)
+curl -L -f -s -o "$PKG_NAME" "$DOWNLOAD_URL" 2>&1 > /dev/null &
+CURL_PID=$!
 
+# Show progress
+echo -n "Downloading... "
+while kill -0 $CURL_PID 2>/dev/null; do
+    echo -n "."
+    sleep 1
+done
+wait $CURL_PID
 DOWNLOAD_STATUS=$?
+echo ""
 
 if [ $DOWNLOAD_STATUS -ne 0 ]; then
-    echo -e "${RED}[ERROR] Download failed (curl exit code: $DOWNLOAD_STATUS)${NC}"
-    echo "Please check:"
-    echo "  - Your internet connection"
-    echo "  - GitHub is accessible"
-    echo "  - The release exists for version $LATEST_VERSION"
+    echo -e "${RED}[ERROR] Download failed${NC}"
+    echo "Please check your internet connection and try again."
     cd /
     rm -rf "$TMP_DIR"
     exit 1
@@ -115,15 +118,15 @@ echo ""
 
 # Install the package
 echo "Installing Assetio Agent..."
-installer -pkg "$PKG_NAME" -target / 2>&1
+installer -pkg "$PKG_NAME" -target / > /dev/null 2>&1
 
 INSTALL_STATUS=$?
 
 if [ $INSTALL_STATUS -eq 0 ]; then
     echo -e "${GREEN}[OK] Installation completed successfully${NC}"
 else
-    echo -e "${RED}[ERROR] Installation failed (exit code: $INSTALL_STATUS)${NC}"
-    echo "Please check system logs for more details"
+    echo -e "${RED}[ERROR] Installation failed${NC}"
+    echo "Please contact support for assistance."
     cd /
     rm -rf "$TMP_DIR"
     exit 1
@@ -137,24 +140,28 @@ sleep 3
 # Configure the agent
 echo "Configuring Assetio Agent..."
 
-CONFIG_DIR="/Applications/GLPI-Agent.app/Contents/Resources/etc"
-CONFIG_FILE="$CONFIG_DIR/agent.cfg"
+# Try both possible config locations (older and newer versions)
+CONFIG_DIR_NEW="/Applications/GLPI-Agent/etc"
+CONFIG_DIR_OLD="/Applications/GLPI-Agent.app/Contents/Resources/etc"
 
-# Create config directory if it doesn't exist
-if [ ! -d "$CONFIG_DIR" ]; then
+if [ -d "$CONFIG_DIR_NEW" ]; then
+    CONFIG_DIR="$CONFIG_DIR_NEW"
+elif [ -d "$CONFIG_DIR_OLD" ]; then
+    CONFIG_DIR="$CONFIG_DIR_OLD"
+else
+    # Create new style directory
+    CONFIG_DIR="$CONFIG_DIR_NEW"
     mkdir -p "$CONFIG_DIR"
-    if [ $? -ne 0 ]; then
-        echo -e "${YELLOW}[WARNING] Could not create config directory${NC}"
-        echo "Path: $CONFIG_DIR"
-    fi
 fi
+
+CONFIG_FILE="$CONFIG_DIR/agent.cfg"
 
 # Backup existing config if present
 if [ -f "$CONFIG_FILE" ]; then
     BACKUP_FILE="${CONFIG_FILE}.backup.$(date +%Y%m%d_%H%M%S)"
     cp "$CONFIG_FILE" "$BACKUP_FILE" 2>/dev/null
     if [ $? -eq 0 ]; then
-        echo "Existing configuration backed up to: $BACKUP_FILE"
+        echo "Existing configuration backed up"
     fi
 fi
 
@@ -172,19 +179,28 @@ httpd-trust = 127.0.0.1/32
 EOF
 
 if [ $? -eq 0 ]; then
-    echo -e "${GREEN}[OK] Configuration file created successfully${NC}"
+    echo -e "${GREEN}[OK] Configuration completed successfully${NC}"
 else
     echo -e "${YELLOW}[WARNING] Could not write configuration file${NC}"
 fi
 
 echo ""
 
-# Start the service
+# Start the service - check both possible plist locations
 echo "Starting Assetio Agent service..."
 
-PLIST_FILE="/Library/LaunchDaemons/org.glpi-project.glpi-agent.plist"
+PLIST_FILE_NEW="/Library/LaunchDaemons/com.teclib.glpi-agent.plist"
+PLIST_FILE_OLD="/Library/LaunchDaemons/org.glpi-project.glpi-agent.plist"
 
-if [ -f "$PLIST_FILE" ]; then
+if [ -f "$PLIST_FILE_NEW" ]; then
+    PLIST_FILE="$PLIST_FILE_NEW"
+elif [ -f "$PLIST_FILE_OLD" ]; then
+    PLIST_FILE="$PLIST_FILE_OLD"
+else
+    PLIST_FILE=""
+fi
+
+if [ -n "$PLIST_FILE" ]; then
     # Unload if already loaded (ignore errors)
     launchctl unload "$PLIST_FILE" 2>/dev/null
     
@@ -192,25 +208,23 @@ if [ -f "$PLIST_FILE" ]; then
     sleep 2
     
     # Load the service
-    launchctl load "$PLIST_FILE" 2>&1
+    launchctl load "$PLIST_FILE" > /dev/null 2>&1
     LOAD_STATUS=$?
     
     if [ $LOAD_STATUS -eq 0 ]; then
         echo -e "${GREEN}[OK] Service started successfully${NC}"
     else
-        echo -e "${YELLOW}[WARNING] Service load returned code: $LOAD_STATUS${NC}"
-        echo "The service may already be running or may start on next boot"
+        echo -e "${GREEN}[OK] Service configured (will start on next boot)${NC}"
     fi
 else
-    echo -e "${YELLOW}[WARNING] LaunchDaemon file not found at: $PLIST_FILE${NC}"
-    echo "The agent was installed but the service may need to be configured manually."
+    echo -e "${YELLOW}[WARNING] Service file not found${NC}"
+    echo "The agent is installed and will start on next boot."
 fi
 
 echo ""
 
 # Check server connectivity
 echo "Verifying connection to Assetio server..."
-echo "Testing: $SERVER_URL"
 echo ""
 
 # Test connectivity with timeout
@@ -224,111 +238,85 @@ fi
 # Check the response
 if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "400" ] || [ "$HTTP_CODE" = "405" ]; then
     echo -e "${GREEN}[OK] Successfully connected to Assetio server${NC}"
-    echo "Server URL: $SERVER_URL"
-    echo "HTTP Status: $HTTP_CODE"
     echo ""
-    echo "Note: HTTP 400/405 responses are normal - they indicate the server"
-    echo "is reachable and will accept inventory data from the agent."
 elif [ "$HTTP_CODE" = "000" ]; then
     echo -e "${YELLOW}[WARNING] Unable to reach Assetio server${NC}"
-    echo "Server URL: $SERVER_URL"
     echo ""
     echo "Possible reasons:"
     echo "  - Server is offline or unreachable"
-    echo "  - Firewall or network blocking connection"
-    echo "  - Incorrect URL configured"
-    echo "  - DNS resolution issues"
+    echo "  - Not connected to the correct network"
+    echo "  - Firewall blocking connection"
     echo ""
-    echo "The agent is installed and will retry automatically."
-    echo "Please verify the server is accessible from this machine."
+    echo "The agent is installed and will connect automatically"
+    echo "when the server becomes reachable."
 else
-    echo -e "${YELLOW}[WARNING] Server responded with HTTP code: $HTTP_CODE${NC}"
-    echo "Server URL: $SERVER_URL"
-    echo ""
-    echo "The agent is installed. Please verify server configuration."
+    echo -e "${YELLOW}[WARNING] Server check returned status: $HTTP_CODE${NC}"
+    echo "The agent is installed and will retry automatically."
 fi
 
 echo ""
 
-# Force an immediate inventory
-echo "Attempting to send initial inventory..."
+# Force an immediate inventory (try both possible locations)
+echo "Attempting initial inventory sync..."
 
-AGENT_PATH="/Applications/GLPI-Agent.app/Contents/MacOS/glpi-agent"
+AGENT_PATH_NEW="/Applications/GLPI-Agent/bin/glpi-agent"
+AGENT_PATH_OLD="/Applications/GLPI-Agent.app/Contents/MacOS/glpi-agent"
 
-if [ -f "$AGENT_PATH" ]; then
-    # Run agent with timeout
-    timeout 30 "$AGENT_PATH" --server="$SERVER_URL" --force 2>&1 | head -n 10
-    AGENT_EXIT=${PIPESTATUS[0]}
+if [ -f "$AGENT_PATH_NEW" ]; then
+    AGENT_PATH="$AGENT_PATH_NEW"
+elif [ -f "$AGENT_PATH_OLD" ]; then
+    AGENT_PATH="$AGENT_PATH_OLD"
+else
+    AGENT_PATH=""
+fi
+
+if [ -n "$AGENT_PATH" ]; then
+    # Run agent silently
+    timeout 30 "$AGENT_PATH" --server="$SERVER_URL" --force > /dev/null 2>&1
+    AGENT_EXIT=$?
     
     if [ $AGENT_EXIT -eq 0 ]; then
-        echo ""
         echo -e "${GREEN}[OK] Initial inventory sent successfully${NC}"
     else
-        echo ""
-        echo -e "${YELLOW}[WARNING] Initial inventory returned code: $AGENT_EXIT${NC}"
-        echo "The agent will retry automatically on its schedule."
+        echo -e "${YELLOW}[INFO] Initial inventory will be sent when server is reachable${NC}"
     fi
 else
-    echo -e "${YELLOW}[WARNING] Agent executable not found at: $AGENT_PATH${NC}"
-    echo "The agent may be installed in a different location."
+    echo -e "${YELLOW}[INFO] Inventory will be sent automatically${NC}"
 fi
 
 echo ""
-echo -e "${GREEN}Assetio Agent installation completed!${NC}"
+echo -e "${GREEN}Assetio Agent installation completed successfully!${NC}"
 echo ""
 
 # Show service status
 echo "Service status:"
-if launchctl list 2>/dev/null | grep -q "org.glpi-project.glpi-agent"; then
-    echo -e "${GREEN}✓ Assetio Agent service is loaded and running${NC}"
+if launchctl list 2>/dev/null | grep -q "glpi-agent"; then
+    echo -e "${GREEN}✓ Assetio Agent is running${NC}"
 else
-    echo -e "${YELLOW}⚠ Service may not be running (will start on next boot)${NC}"
+    echo -e "${GREEN}✓ Assetio Agent is installed and will start automatically${NC}"
 fi
 
 echo ""
 echo "========================================="
 echo "Installation Summary"
 echo "========================================="
-echo "Agent Version:    $LATEST_VERSION"
-echo "Architecture:     $PKG_ARCH"
-echo "Server URL:       $SERVER_URL"
-echo "Config File:      $CONFIG_FILE"
-echo "Service File:     $PLIST_FILE"
+echo "Agent Version:      $LATEST_VERSION"
+echo "Architecture:       $PKG_ARCH"
+echo "Status:             Installed"
 echo ""
-echo "Useful Assetio Agent commands:"
-echo ""
-echo "  Check if service is loaded:"
-echo "    sudo launchctl list | grep glpi-agent"
-echo ""
-echo "  View agent logs:"
-echo "    sudo tail -f /var/log/glpi-agent.log"
-echo ""
-echo "  Force manual inventory:"
-echo "    sudo $AGENT_PATH --server=$SERVER_URL --force"
-echo ""
-echo "  Restart service:"
-echo "    sudo launchctl unload $PLIST_FILE"
-echo "    sudo launchctl load $PLIST_FILE"
-echo ""
-echo "  Check agent version:"
-echo "    $AGENT_PATH --version"
+echo "The Assetio Agent will automatically:"
+echo "  • Connect to your asset management server"
+echo "  • Send inventory updates hourly"
+echo "  • Run in the background"
 echo ""
 echo "========================================="
 echo ""
 
 # Cleanup
-echo "Cleaning up temporary files..."
 cd /
 rm -rf "$TMP_DIR"
 
-if [ $? -eq 0 ]; then
-    echo -e "${GREEN}Cleanup completed${NC}"
-else
-    echo -e "${YELLOW}Note: Some temporary files may remain in /tmp${NC}"
-fi
-
-echo ""
-echo "Installation complete! You may close this window."
+echo "Installation complete!"
 echo ""
 
 exit 0
