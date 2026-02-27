@@ -57,8 +57,8 @@ fi
 
 echo ""
 
-# Construct download URL
-PKG_NAME="GLPI-Agent-${LATEST_VERSION}-${PKG_ARCH}.pkg"
+# Construct download URL (note: macOS packages use underscore, not dash)
+PKG_NAME="GLPI-Agent-${LATEST_VERSION}_${PKG_ARCH}.pkg"
 DOWNLOAD_URL="https://github.com/glpi-project/glpi-agent/releases/download/${LATEST_VERSION}/${PKG_NAME}"
 
 echo "Downloading Assetio Agent..."
