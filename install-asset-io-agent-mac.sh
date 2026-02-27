@@ -1,3 +1,4 @@
+
 #!/bin/bash
 
 # Colors for output
@@ -57,7 +58,7 @@ fi
 
 echo ""
 
-# Construct download URL (note: macOS packages use underscore, not dash)
+# Construct download URL (macOS packages use underscore between version and arch)
 PKG_NAME="GLPI-Agent-${LATEST_VERSION}_${PKG_ARCH}.pkg"
 DOWNLOAD_URL="https://github.com/glpi-project/glpi-agent/releases/download/${LATEST_VERSION}/${PKG_NAME}"
 
